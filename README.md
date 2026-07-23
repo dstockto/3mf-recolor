@@ -14,11 +14,11 @@ path and it works offline.
 
 ## Why
 
-Multi-plate "kit" models are often organized one filament color per plate, with
-the plate named after the color (`Cotton White`, `Army Red`). But the RGB values
-baked into the project are usually the designer's eyeballed approximations, not
-the manufacturer's published values — off by enough that automated color
-matching picks the wrong spool:
+This targets multi-plate projects where each plate is a single-color print — one
+filament per plate, with the plate named after the color (`Cotton White`,
+`Army Red`). The RGB values baked into such a project are usually eyeballed
+approximations rather than the manufacturer's published values, and are often
+off by enough that automated color matching picks the wrong spool:
 
 | plate | in the file | actual Polymaker |
 |---|---|---|
