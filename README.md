@@ -37,9 +37,19 @@ obviously two-tone chip means it moved a lot.
 
 ### Colors
 
-A Polymaker mapping is built in — the same one checked in here as
-[`colors.json`](colors.json), handy as a starting point to copy and edit. To use
-your own, click **Load mapping** and pick a JSON file of `name → hex`:
+A Polymaker mapping is **built into `index.html`** — the app does not read
+`colors.json` at runtime. (It couldn't: a page opened from `file://` isn't
+allowed to fetch a sibling file.) The checked-in [`colors.json`](colors.json) is
+a copy of that same mapping, kept for reference.
+
+To use your own palette:
+
+1. **Download mapping** — saves the mapping currently in use as `colors.json`.
+2. Edit it in any text editor.
+3. **Load mapping** — pick your edited file. It replaces the built-in one for
+   this session. **Use built-in** switches back.
+
+The mapping is a flat JSON object of `name → hex`:
 
 ```json
 {

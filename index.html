@@ -169,6 +169,7 @@ footer code{font-family:var(--mono); font-size:12px; color:var(--ink-2)}
 
 <div class="bar">
   <div class="grow src" id="mapSrc"></div>
+  <button id="saveMap" title="Save the current mapping as colors.json">Download mapping</button>
   <button id="loadMap">Load mapping</button>
   <button id="resetMap" class="hidden">Use built-in</button>
 </div>
@@ -693,6 +694,19 @@ const drop = $('drop');
 drop.addEventListener('drop', (e) => {
   const f = e.dataTransfer.files[0];
   if (f) loadFile(f);
+});
+
+// Export the active mapping so it can be edited and loaded back in. This is
+// the only way to get a starting point when the page is opened from file://,
+// where a sibling colors.json can't be fetched.
+$('saveMap').addEventListener('click', () => {
+  const blob = new Blob([JSON.stringify(mapping, null, 2) + '\n'],
+                        {type: 'application/json'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'colors.json';
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 30000);
 });
 
 $('loadMap').addEventListener('click', () => $('mapFile').click());

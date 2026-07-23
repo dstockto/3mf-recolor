@@ -7,7 +7,7 @@
 import { chromium } from 'playwright';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { dirname, join } from 'node:path';
-import { readFileSync, existsSync, mkdtempSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { inflateRawSync } from 'node:zlib';
 
@@ -98,12 +98,44 @@ const builtin = await page.evaluate(() => {
   const c = window.__core.BUILTIN_COLORS;
   return { n: Object.keys(c).length, cotton: c['Cotton White'],
            gray: c['Ash Gray'], grey: c['Ash Grey'],
-           malformed: Object.keys(c).filter(k => !/^[A-Za-z0-9]/.test(k)) };
+           malformed: Object.keys(c).filter(k => !/^[A-Za-z0-9]/.test(k)), all: c };
 });
+const builtinAll = builtin.all;
 ok('built-in mapping is embedded', builtin.n > 50, `${builtin.n} colors`);
 ok('built-in has gray and grey variants',
    builtin.gray === builtin.grey && !!builtin.gray);
 ok('no malformed keys', builtin.malformed.length === 0, builtin.malformed.join(','));
+
+// -- mapping export round-trips ---------------------------------------------
+{
+  const dir = mkdtempSync(join(tmpdir(), '3mf-map-'));
+  const out = join(dir, 'colors.json');
+  const [dl] = await Promise.all([
+    page.waitForEvent('download', { timeout: 30000 }),
+    page.click('#saveMap'),
+  ]);
+  await dl.saveAs(out);
+  ok('exported file is named colors.json', dl.suggestedFilename() === 'colors.json',
+     dl.suggestedFilename());
+
+  const exported = JSON.parse(readFileSync(out, 'utf8'));
+  ok('export matches the built-in mapping',
+     JSON.stringify(exported) === JSON.stringify(builtinAll),
+     `${Object.keys(exported).length} vs ${Object.keys(builtinAll).length}`);
+
+  // Edit it, load it back, and confirm the app picked it up.
+  const edited = join(dir, 'edited.json');
+  writeFileSync(edited, JSON.stringify({ 'Cotton White': '#123456' }, null, 2));
+  await page.setInputFiles('#mapFile', edited);
+  await page.waitForFunction(() => /edited\.json/.test(document.getElementById('mapSrc').textContent));
+  const active = await page.evaluate(() => document.getElementById('mapSrc').textContent);
+  ok('edited mapping loads back in', /edited\.json/.test(active) && /1 names/.test(active), active);
+
+  await page.click('#resetMap');
+  await page.waitForFunction(() => /built-in/.test(document.getElementById('mapSrc').textContent));
+  ok('built-in mapping can be restored',
+     /built-in/.test(await page.evaluate(() => document.getElementById('mapSrc').textContent)));
+}
 
 // -- full round trip on a real file -----------------------------------------
 if (sample && existsSync(sample)) {
