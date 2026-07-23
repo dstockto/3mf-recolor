@@ -1,5 +1,7 @@
 # 3MF Recolor
 
+### → [dstockto.github.io/3mf-recolor](https://dstockto.github.io/3mf-recolor/)
+
 A single-page browser tool that rewrites the per-plate filament colors in a
 Bambu Studio / OrcaSlicer `.3mf` project, matching each plate to an exact RGB by
 its name.
@@ -29,7 +31,10 @@ the printer that actually has that filament loaded.
 
 ## Use it
 
-Open `index.html` in a browser. Drop in a `.3mf`. Review the plan. Download.
+Open [the hosted page](https://dstockto.github.io/3mf-recolor/), or download
+`index.html` and open it directly — it behaves identically either way, and
+neither one sends your file anywhere. Drop in a `.3mf`, review the plan,
+download the result.
 
 Each row shows a **split chip** — the old color on the upper left, the new one
 on the lower right. A nearly solid chip means the color barely moved; an
