@@ -156,9 +156,3 @@ npm test -- /path/to/sample.3mf       # + full round-trip on a real file
 The round-trip test loads an actual `.3mf`, clicks through the UI, saves the
 download, and verifies the produced archive: the entry set is unchanged, exactly
 one entry differs, and within it only `filament_colour` changed.
-
-## Related
-
-The same recolor logic exists as a Go CLI in
-[`read3mf`](https://github.com/dstockto/read3mf), which can also generate the
-color mapping from a Spoolman inventory via `fil find --json`.
