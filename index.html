@@ -122,11 +122,29 @@ tr.skip td.name{color:var(--ink-3)}
   background-image:repeating-linear-gradient(45deg,#2f3032 0 4px,#242526 4px 8px);
   box-shadow: inset 0 0 0 1px rgba(255,255,255,.10);
 }
-.hexpair{font-family:var(--mono); font-size:12px; color:var(--ink-2); font-variant-numeric:tabular-nums}
-.hexpair .to{color:var(--ink-3); padding:0 5px}
-.hexpair .new{color:var(--ink)}
+/* Cause above, effect below: the pick and the resulting hex sit together. */
+.stack{display:inline-flex; flex-direction:column; gap:3px; vertical-align:middle}
+.hexpair{font-family:var(--mono); font-size:11.5px; color:var(--ink-3); font-variant-numeric:tabular-nums; padding-left:2px}
+.hexpair .old{color:var(--ink-2)}
 .note{font-family:var(--mono); font-size:11.5px; color:var(--ink-3)}
-.via{font-family:var(--mono); font-size:11px; color:var(--ink-3)}
+
+/* Native select, restyled. Kept native so it stays keyboard- and
+   touch-navigable, and so long palettes scroll the way people expect. */
+.stack select{
+  font-family:var(--mono); font-size:12px; color:var(--ink);
+  background:var(--raised); border:1px solid var(--line); border-radius:5px;
+  padding:5px 24px 5px 8px; max-width:240px;
+  appearance:none; -webkit-appearance:none; cursor:pointer;
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--ink-2) 50%),
+    linear-gradient(135deg, var(--ink-2) 50%, transparent 50%);
+  background-position: right 11px center, right 6px center;
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+}
+.stack select:hover{border-color:#4a4c4f}
+.stack select option{background:var(--panel); color:var(--ink)}
+tr.skip .stack select{color:var(--ink-2)}
 
 /* ── Footer / actions ─────────────────────────────────────────────────────── */
 .actions{
@@ -487,33 +505,58 @@ function lookupColor(mapping, plateName){
   return n === 1 ? hit : null;
 }
 
-function planRecolor(plates, existing, mapping){
+// First pass: propose a color name for every plate that can take one. A plate
+// with no slot, or with more than one, is never proposed for — those are refused.
+function autoMatch(plates, mapping){
+  const selection = new Map();
+  for (const p of plates){
+    if (p.slots.length !== 1) continue;
+    const found = lookupColor(mapping, p.name);
+    selection.set(p.id, found ? found.key : '');
+  }
+  return selection;
+}
+
+// Second pass: turn a selection — auto-matched, or picked by hand — into rows
+// and the slot->hex edits. Conflicts are detected here, so they get re-checked
+// every time a pick changes.
+function resolveSelection(plates, existing, mapping, selection){
   const edits = new Map();
   const rows = [];
   for (const p of plates){
-    const row = {plate: p, slot: 0, oldHex: '', newHex: '', key: '', note: ''};
+    const row = {plate: p, slot: 0, oldHex: '', newHex: '', key: '', note: '',
+                 selectable: false};
     if (p.slots.length === 0){
       row.note = 'no filament slot on this plate';
     } else if (p.slots.length > 1){
       row.note = `uses ${p.slots.length} filaments (${p.slots.join(', ')}) — not flattened`;
     } else {
       const slot = p.slots[0];
-      const found = lookupColor(mapping, p.name);
-      if (!found){
-        row.note = p.name ? 'no color in mapping' : 'plate has no name';
-      } else if (edits.has(slot) && edits.get(slot).toLowerCase() !== found.hex.toLowerCase()){
+      row.selectable = true;
+      row.oldHex = existing[slot - 1] || '';
+      const name = selection.get(p.id) || '';
+      row.key = name;
+      const hex = name ? mapping[name] : null;
+      if (!name){
+        row.note = p.name ? 'no color selected' : 'plate has no name';
+      } else if (!hex){
+        row.note = `"${name}" is not in this mapping`;
+      } else if (edits.has(slot) && edits.get(slot).toLowerCase() !== hex.toLowerCase()){
         row.note = `slot ${slot} already set to ${edits.get(slot)} by another plate`;
       } else {
         row.slot = slot;
-        row.newHex = found.hex;
-        row.key = found.key;
-        row.oldHex = existing[slot - 1] || '';
-        edits.set(slot, found.hex);
+        row.newHex = hex;
+        edits.set(slot, hex);
       }
     }
     rows.push(row);
   }
   return {rows, edits};
+}
+
+// Convenience: auto-match then resolve — the plan before any hand-picking.
+function planRecolor(plates, existing, mapping){
+  return resolveSelection(plates, existing, mapping, autoMatch(plates, mapping));
 }
 
 // Replace only the matched hex values inside the filament_colour array; the
@@ -539,6 +582,49 @@ function setFilamentColours(psText, edits){
 const $ = (id) => document.getElementById(id);
 let mapping = BUILTIN_COLORS;
 let mappingName = 'built-in Polymaker';
+let remembered = false;
+
+// A custom mapping is kept in localStorage so it only has to be loaded once.
+// Storage can be unavailable (private browsing, locked-down file:// origins),
+// so every access degrades quietly to the built-in mapping.
+const STORE_KEY = '3mf-recolor.mapping';
+
+function validateMapping(obj){
+  if (!obj || typeof obj !== 'object' || Array.isArray(obj))
+    throw new Error('Mapping must be a JSON object of "name": "#RRGGBB".');
+  const names = Object.keys(obj);
+  if (names.length === 0) throw new Error('Mapping is empty.');
+  for (const k of names){
+    const v = obj[k];
+    if (typeof v !== 'string' || !/^#[0-9a-f]{6}$/i.test(v.trim()))
+      throw new Error(`"${k}" is not a #RRGGBB color.`);
+  }
+  return obj;
+}
+
+function rememberMapping(name, colors){
+  try{ localStorage.setItem(STORE_KEY, JSON.stringify({name, colors})); remembered = true; }
+  catch{ remembered = false; }
+}
+function forgetMapping(){
+  try{ localStorage.removeItem(STORE_KEY); }catch{}
+  remembered = false;
+}
+function restoreMapping(){
+  let raw = null;
+  try{ raw = localStorage.getItem(STORE_KEY); }catch{ return false; }
+  if (!raw) return false;
+  try{
+    const {name, colors} = JSON.parse(raw);
+    mapping = validateMapping(colors);
+    mappingName = name || 'saved mapping';
+    remembered = true;
+    return true;
+  }catch{
+    forgetMapping();   // stored value is unusable; don't keep tripping over it
+    return false;
+  }
+}
 let current = null;   // {buf, entries, psName, psText, rows, edits, fileName}
 
 function showMsg(text, bad){
@@ -550,14 +636,52 @@ function showMsg(text, bad){
 function clearMsg(){ $('msg').classList.add('hidden'); }
 
 function renderMapSrc(){
+  const custom = mapping !== BUILTIN_COLORS;
+  const tail = custom && remembered ? ' · saved on this device' : '';
   $('mapSrc').innerHTML =
-    `Colors: <b>${mappingName}</b> · ${Object.keys(mapping).length} names`;
-  $('resetMap').classList.toggle('hidden', mapping === BUILTIN_COLORS);
+    `Colors: <b>${mappingName}</b> · ${Object.keys(mapping).length} names${tail}`;
+  $('resetMap').classList.toggle('hidden', !custom);
 }
 
 const fmtMB = (n) => (n / 1048576).toFixed(1) + ' MB';
 
-function render(){
+// Build the color picker for one plate. Every plate that can take a color gets
+// one, whether or not its name matched — so an unmatched plate can be assigned
+// by hand, and a matched one can be overridden.
+function buildPicker(row){
+  const sel = document.createElement('select');
+  sel.setAttribute('aria-label', `Color for plate ${row.plate.id}`);
+
+  const none = document.createElement('option');
+  none.value = '';
+  none.textContent = '— leave unchanged —';
+  sel.appendChild(none);
+
+  for (const name of Object.keys(mapping).sort((a, b) => a.localeCompare(b))){
+    const o = document.createElement('option');
+    o.value = name;
+    o.textContent = `${name}  ${mapping[name]}`;
+    sel.appendChild(o);
+  }
+
+  // A name carried over from another mapping may no longer exist; keep it
+  // visible rather than silently snapping to "leave unchanged".
+  if (row.key && !(row.key in mapping)){
+    const o = document.createElement('option');
+    o.value = row.key;
+    o.textContent = `${row.key}  (not in mapping)`;
+    sel.appendChild(o);
+  }
+
+  sel.value = row.key || '';
+  sel.addEventListener('change', () => {
+    current.selection.set(row.plate.id, sel.value);
+    replan({focus: row.plate.id});
+  });
+  return sel;
+}
+
+function render(opts = {}){
   const {rows, edits, fileName, buf, plateCount} = current;
   $('fName').textContent = fileName;
   $('fMeta').textContent = `${fmtMB(buf.length)} · ${plateCount} plate${plateCount === 1 ? '' : 's'}`;
@@ -575,50 +699,57 @@ function render(){
     const name = document.createElement('td');
     name.className = 'name';
     name.textContent = r.plate.name || '(unnamed)';
-    if (!r.note && r.key && r.key.trim().toLowerCase() !== r.plate.name.trim().toLowerCase()){
-      const via = document.createElement('span');
-      via.className = 'via';
-      via.textContent = `  via ${r.key}`;
-      name.appendChild(via);
-    }
 
     const slot = document.createElement('td');
     slot.className = 'slot';
-    slot.textContent = r.slot ? r.slot : '—';
+    slot.textContent = r.plate.slots.length === 1 ? r.plate.slots[0] : '—';
 
     const change = document.createElement('td');
     change.className = 'change';
+
     const chip = document.createElement('span');
     chip.className = 'chip';
-    if (r.note){
-      chip.classList.add('void');
-    } else {
+    if (r.newHex){
       const from = r.oldHex || '#000000';
-      chip.style.background =
-        `linear-gradient(135deg, ${from} 0 50%, ${r.newHex} 50% 100%)`;
+      chip.style.background = `linear-gradient(135deg, ${from} 0 50%, ${r.newHex} 50% 100%)`;
       chip.title = `${from} → ${r.newHex}`;
+    } else {
+      chip.classList.add('void');
+      if (r.oldHex) chip.title = `stays ${r.oldHex}`;
     }
     change.appendChild(chip);
 
+    const stack = document.createElement('span');
+    stack.className = 'stack';
+    if (r.selectable){
+      stack.appendChild(buildPicker(r));
+    }
     const text = document.createElement('span');
-    if (r.note){
+    if (r.newHex){
+      // The picker already names the target color, so only the value being
+      // replaced needs stating here.
+      text.className = 'hexpair';
+      text.innerHTML = `was <span class="old">${r.oldHex || 'n/a'}</span>`;
+    } else {
       text.className = 'note';
       text.textContent = r.note;
-    } else {
-      text.className = 'hexpair';
-      text.innerHTML =
-        `${r.oldHex || 'n/a'}<span class="to">→</span><span class="new">${r.newHex}</span>`;
     }
-    change.appendChild(text);
+    stack.appendChild(text);
+    change.appendChild(stack);
 
     tr.append(num, name, slot, change);
     tbody.appendChild(tr);
+
+    if (opts.focus === r.plate.id){
+      const s = tr.querySelector('select');
+      if (s) s.focus();
+    }
   }
 
   const n = edits.size;
-  const skipped = rows.filter(r => r.note).length;
+  const skipped = rows.length - n;
   $('summary').textContent =
-    `${n} plate${n === 1 ? '' : 's'} to recolor` + (skipped ? ` · ${skipped} skipped` : '');
+    `${n} plate${n === 1 ? '' : 's'} to recolor` + (skipped ? ` · ${skipped} unchanged` : '');
   $('save').disabled = n === 0;
   $('result').classList.remove('hidden');
 }
@@ -642,14 +773,15 @@ async function loadFile(file){
     try{ existing = JSON.parse(psText).filament_colour || []; }catch{ /* keep [] */ }
 
     const plates = parsePlateSlots(msText);
-    const {rows, edits} = planRecolor(plates, existing, mapping);
+    const selection = autoMatch(plates, mapping);
+    const {rows, edits} = resolveSelection(plates, existing, mapping, selection);
 
     current = {buf, entries, psName: psE.name, psText, rows, edits, plates, existing,
-               fileName: file.name, plateCount: plates.length};
+               selection, fileName: file.name, plateCount: plates.length};
     render();
     $('drop').classList.add('compact');
     if (edits.size === 0)
-      showMsg('No plate names matched the color mapping. Load a different mapping, or check the plate names in the slicer.', true);
+      showMsg('No plate names matched the color mapping. Pick colors by hand below, or load a different mapping.', true);
   }catch(err){
     current = null;
     $('drop').classList.remove('compact');
@@ -714,48 +846,51 @@ $('mapFile').addEventListener('change', async (e) => {
   const f = e.target.files[0];
   if (!f) return;
   try{
-    const parsed = JSON.parse(await f.text());
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed))
-      throw new Error('Mapping must be a JSON object of "name": "#RRGGBB".');
-    for (const [k, v] of Object.entries(parsed)){
-      if (typeof v !== 'string' || !/^#[0-9a-f]{6}$/i.test(v.trim()))
-        throw new Error(`"${k}" is not a #RRGGBB color.`);
-    }
-    mapping = parsed;
+    mapping = validateMapping(JSON.parse(await f.text()));
     mappingName = f.name;
+    rememberMapping(mappingName, mapping);
     renderMapSrc();
     clearMsg();
-    if (current) replan();
+    if (current) replan({remap: true});
   }catch(err){
     showMsg(err.message || String(err), true);
+  }finally{
+    e.target.value = '';   // allow re-picking the same file after an edit
   }
 });
 $('resetMap').addEventListener('click', () => {
   mapping = BUILTIN_COLORS;
   mappingName = 'built-in Polymaker';
+  forgetMapping();
   renderMapSrc();
-  if (current) replan();
+  if (current) replan({remap: true});
 });
 
 // Re-plan the already-loaded file against a new mapping. The file is already
 // in memory and parsed, so this only redoes the lookup.
-function replan(){
+// Re-resolve after a pick changes. Pass {remap:true} when the mapping itself
+// changed, which re-runs auto-matching and drops picks from the old palette.
+function replan(opts = {}){
   if (!current) return;
-  const {rows, edits} = planRecolor(current.plates, current.existing, mapping);
+  if (opts.remap) current.selection = autoMatch(current.plates, mapping);
+  const {rows, edits} =
+    resolveSelection(current.plates, current.existing, mapping, current.selection);
   current.rows = rows;
   current.edits = edits;
-  render();
-  if (edits.size === 0) showMsg('No plate names matched the color mapping.', true);
+  render(opts);
+  if (edits.size === 0 && opts.remap)
+    showMsg('No plate names matched the color mapping. Pick colors by hand below, or load a different mapping.', true);
   else clearMsg();
 }
 
 $('save').addEventListener('click', save);
 
+restoreMapping();
 renderMapSrc();
 
 // exposed for tests
 window.__core = {readCentralDirectory, parsePlateSlots, lookupColor, planRecolor,
-                 setFilamentColours, crc32, BUILTIN_COLORS};
+                 autoMatch, resolveSelection, setFilamentColours, crc32, BUILTIN_COLORS};
 </script>
 </body>
 </html>

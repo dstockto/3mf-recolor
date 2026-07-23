@@ -35,6 +35,19 @@ Each row shows a **split chip** — the old color on the upper left, the new one
 on the lower right. A nearly solid chip means the color barely moved; an
 obviously two-tone chip means it moved a lot.
 
+### Picking colors by hand
+
+Names are matched automatically, but every plate that can take a color also has
+a dropdown listing the whole palette. Use it to:
+
+- **assign** a color to a plate whose name didn't match anything, or
+- **override** one that matched with something else, or
+- choose **— leave unchanged —** to skip a plate.
+
+The chip and the summary update as you pick, and slot conflicts are re-checked
+each time. Plates that use more than one filament get no dropdown — they are
+refused outright, since there'd be no single slot to apply a color to.
+
 ### Colors
 
 A Polymaker mapping is **built into `index.html`** — the app does not read
@@ -46,8 +59,13 @@ To use your own palette:
 
 1. **Download mapping** — saves the mapping currently in use as `colors.json`.
 2. Edit it in any text editor.
-3. **Load mapping** — pick your edited file. It replaces the built-in one for
-   this session. **Use built-in** switches back.
+3. **Load mapping** — pick your edited file.
+
+A loaded mapping is **saved in the browser's local storage**, so it only has to
+be loaded once — it comes back on the next visit, including offline from
+`file://`. **Use built-in** clears it and restores the bundled palette. If
+storage is unavailable (private browsing, a locked-down origin), the mapping
+still works for the session; it just isn't remembered.
 
 The mapping is a flat JSON object of `name → hex`:
 

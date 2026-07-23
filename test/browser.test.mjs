@@ -137,6 +137,89 @@ ok('no malformed keys', builtin.malformed.length === 0, builtin.malformed.join('
      /built-in/.test(await page.evaluate(() => document.getElementById('mapSrc').textContent)));
 }
 
+// -- hand-picking a color ----------------------------------------------------
+const picked = await page.evaluate(() => {
+  const { autoMatch, resolveSelection } = window.__core;
+  const plates = [
+    { id: 1, name: 'Cotton White', slots: [2] },
+    { id: 2, name: 'Nonsense Name', slots: [3] },  // no auto-match
+    { id: 3, name: 'Two Tone', slots: [1, 4] },    // multi-color
+  ];
+  const m = { 'Cotton White': '#e6dddb', 'Army Red': '#bf312e' };
+  const sel = autoMatch(plates, m);
+  const before = resolveSelection(plates, ['#0', '#1', '#2', '#3'], m, sel);
+  // assign a color to the plate that didn't match, and override the one that did
+  sel.set(2, 'Army Red');
+  sel.set(1, 'Army Red');
+  const after = resolveSelection(plates, ['#0', '#1', '#2', '#3'], m, sel);
+  // multi-color plates are never offered a picker
+  return {
+    autoUnmatched: sel.has(2),
+    multiSelectable: before.rows[2].selectable,
+    beforeEdits: [...before.edits.entries()],
+    afterEdits: [...after.edits.entries()],
+    overrideHex: after.rows[0].newHex,
+  };
+});
+ok('unmatched plate still gets a picker', picked.autoUnmatched === true);
+ok('multi-color plate gets no picker', picked.multiSelectable === false);
+ok('picking a color for an unmatched plate adds an edit',
+   picked.beforeEdits.length === 1 && picked.afterEdits.length === 2,
+   JSON.stringify(picked.afterEdits));
+ok('picking overrides an auto-match', picked.overrideHex === '#bf312e', picked.overrideHex);
+
+// picking "leave unchanged" removes the edit
+const cleared = await page.evaluate(() => {
+  const { autoMatch, resolveSelection } = window.__core;
+  const plates = [{ id: 1, name: 'Cotton White', slots: [2] }];
+  const m = { 'Cotton White': '#e6dddb' };
+  const sel = autoMatch(plates, m);
+  sel.set(1, '');
+  const r = resolveSelection(plates, ['#0', '#1'], m, sel);
+  return { n: r.edits.size, note: r.rows[0].note };
+});
+ok('choosing "leave unchanged" drops the edit',
+   cleared.n === 0 && /no color selected/.test(cleared.note), cleared.note);
+
+// -- custom mapping is remembered across a reload ----------------------------
+{
+  const dir = mkdtempSync(join(tmpdir(), '3mf-ls-'));
+  const custom = join(dir, 'my-colors.json');
+  writeFileSync(custom, JSON.stringify({ 'Cotton White': '#abcdef', 'Army Red': '#123456' }));
+  await page.setInputFiles('#mapFile', custom);
+  await page.waitForFunction(() => /my-colors\.json/.test(document.getElementById('mapSrc').textContent));
+
+  const saved = await page.evaluate(() => document.getElementById('mapSrc').textContent);
+  ok('custom mapping reports it is saved', /saved on this device/.test(saved), saved);
+
+  await page.reload();
+  await page.waitForFunction(() => !!window.__core);
+  const afterReload = await page.evaluate(() => ({
+    label: document.getElementById('mapSrc').textContent,
+    colors: window.__core ? null : null,
+    active: document.getElementById('resetMap').classList.contains('hidden'),
+  }));
+  ok('custom mapping survives a reload', /my-colors\.json/.test(afterReload.label), afterReload.label);
+  ok('"Use built-in" is offered after restore', afterReload.active === false);
+
+  // clearing it sticks too
+  await page.click('#resetMap');
+  await page.waitForFunction(() => /built-in/.test(document.getElementById('mapSrc').textContent));
+  await page.reload();
+  await page.waitForFunction(() => !!window.__core);
+  ok('"Use built-in" is remembered too',
+     /built-in/.test(await page.evaluate(() => document.getElementById('mapSrc').textContent)));
+
+  // a corrupt stored value must not wedge the page
+  await page.evaluate(() => localStorage.setItem('3mf-recolor.mapping', '{not json'));
+  await page.reload();
+  await page.waitForFunction(() => !!window.__core);
+  ok('corrupt saved mapping falls back to built-in',
+     /built-in/.test(await page.evaluate(() => document.getElementById('mapSrc').textContent)));
+  ok('corrupt saved mapping is discarded',
+     await page.evaluate(() => localStorage.getItem('3mf-recolor.mapping')) === null);
+}
+
 // -- full round trip on a real file -----------------------------------------
 if (sample && existsSync(sample)) {
   console.log(`\nEnd-to-end (${sample.split('/').pop()})`);
