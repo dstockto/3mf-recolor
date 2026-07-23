@@ -37,8 +37,9 @@ obviously two-tone chip means it moved a lot.
 
 ### Colors
 
-A Polymaker mapping is built in. To use your own, click **Load mapping** and
-pick a JSON file of `name → hex`:
+A Polymaker mapping is built in — the same one checked in here as
+[`colors.json`](colors.json), handy as a starting point to copy and edit. To use
+your own, click **Load mapping** and pick a JSON file of `name → hex`:
 
 ```json
 {
