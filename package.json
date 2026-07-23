@@ -1,0 +1,14 @@
+{
+  "name": "3mf-recolor",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Browser tool that rewrites Bambu/Orca .3mf plate filament colors to exact RGBs, entirely client-side",
+  "license": "MIT",
+  "scripts": {
+    "test": "node test/browser.test.mjs"
+  },
+  "devDependencies": {
+    "playwright": "^1.61.1"
+  }
+}

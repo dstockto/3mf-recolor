@@ -1,0 +1,747 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>3MF Recolor</title>
+<style>
+/* ── Neutral, color-critical chrome ──────────────────────────────────────────
+   Every surface here is achromatic (R=G=B) on purpose: the only saturated
+   pixels on screen should be filament color, so nothing biases how a swatch
+   reads. That's also why there is no accent hue, including on the buttons. */
+:root{
+  --bg:#191a1b;
+  --panel:#212223;
+  --raised:#2a2b2c;
+  --line:#37383a;
+  --line-soft:#2e2f31;
+  --ink:#ececed;
+  --ink-2:#a8a9ab;
+  --ink-3:#77787a;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --pad: clamp(16px, 4vw, 40px);
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{
+  background:var(--bg); color:var(--ink);
+  font-family:var(--sans); font-size:15px; line-height:1.55;
+  -webkit-font-smoothing:antialiased;
+  padding:var(--pad); display:flex; justify-content:center;
+}
+.wrap{width:100%; max-width:880px}
+
+/* Type treatment carries the personality: mono-dominant, like an instrument
+   readout. No webfonts — this has to work offline from file://. */
+.label{
+  font-family:var(--mono); font-size:10.5px; letter-spacing:.14em;
+  text-transform:uppercase; color:var(--ink-3);
+}
+.mono{font-family:var(--mono); font-variant-numeric:tabular-nums}
+
+header{margin-bottom:28px}
+h1{
+  font-family:var(--mono); font-size:15px; font-weight:600;
+  letter-spacing:.22em; text-transform:uppercase; margin:0 0 6px;
+}
+header p{margin:0; color:var(--ink-2); font-size:14px; max-width:56ch}
+
+/* ── Dropzone ─────────────────────────────────────────────────────────────── */
+.drop{
+  border:1px dashed var(--line); border-radius:10px;
+  background:var(--panel); padding:34px 24px; text-align:center;
+  transition:background .15s ease, border-color .15s ease;
+  cursor:pointer;
+}
+.drop:hover,.drop:focus-visible{border-color:#4a4c4f; background:var(--raised)}
+.drop.over{border-color:var(--ink-2); background:var(--raised); border-style:solid}
+.drop p{margin:0 0 4px; font-size:15px}
+.drop .label{display:block; margin-top:10px}
+/* Once a file is loaded the plan is the subject; the picker steps back. */
+.drop.compact{padding:13px 18px}
+.drop.compact p{font-size:13px; color:var(--ink-2); margin:0}
+.drop.compact .label{display:none}
+
+/* ── Mapping bar ──────────────────────────────────────────────────────────── */
+.bar{
+  display:flex; flex-wrap:wrap; gap:12px; align-items:center;
+  margin-top:14px; padding:12px 14px;
+  background:var(--panel); border:1px solid var(--line-soft); border-radius:8px;
+}
+.bar .grow{flex:1 1 auto; min-width:0}
+.bar .src{font-family:var(--mono); font-size:12.5px; color:var(--ink-2)}
+.bar .src b{color:var(--ink); font-weight:600}
+
+button{
+  font-family:var(--mono); font-size:11px; letter-spacing:.12em;
+  text-transform:uppercase; color:var(--ink);
+  background:var(--raised); border:1px solid var(--line);
+  padding:9px 14px; border-radius:6px; cursor:pointer;
+  transition:background .15s ease, border-color .15s ease;
+}
+button:hover{background:#333537; border-color:#4a4c4f}
+button:disabled{opacity:.4; cursor:not-allowed}
+button.primary{background:#e9e9ea; color:#151617; border-color:#e9e9ea; font-weight:600}
+button.primary:hover{background:#fff; border-color:#fff}
+:focus-visible{outline:2px solid #cfd0d2; outline-offset:2px}
+
+/* ── File header ──────────────────────────────────────────────────────────── */
+.filehead{
+  margin-top:26px; padding-bottom:14px; border-bottom:1px solid var(--line);
+  display:flex; flex-wrap:wrap; gap:6px 18px; align-items:baseline;
+}
+.filehead .name{font-family:var(--mono); font-size:14px; word-break:break-all}
+.filehead .meta{font-family:var(--mono); font-size:12px; color:var(--ink-3)}
+
+/* ── Plan table ───────────────────────────────────────────────────────────── */
+table{width:100%; border-collapse:collapse; margin-top:4px}
+thead th{
+  text-align:left; padding:12px 8px 8px 0;
+  font-family:var(--mono); font-size:10.5px; letter-spacing:.14em;
+  text-transform:uppercase; color:var(--ink-3); font-weight:400;
+  border-bottom:1px solid var(--line-soft);
+}
+tbody td{padding:11px 8px 11px 0; border-bottom:1px solid var(--line-soft); vertical-align:middle}
+tbody tr:last-child td{border-bottom:none}
+td.num{font-family:var(--mono); font-size:12px; color:var(--ink-3); width:1%; white-space:nowrap; padding-right:16px}
+td.name{font-size:14px; min-width:0; word-break:break-word}
+td.slot{font-family:var(--mono); font-size:12px; color:var(--ink-2); width:1%; text-align:right; padding-right:16px}
+td.change{width:1%; white-space:nowrap}
+tr.skip td.name{color:var(--ink-3)}
+
+/* ── The split chip: one square, old upper-left, new lower-right ───────────
+   When the drift is small it reads as a solid chip; when it's large it's
+   visibly two-tone. The form encodes the magnitude. */
+.chip{
+  display:inline-block; width:34px; height:22px; border-radius:4px;
+  vertical-align:middle; margin-right:10px;
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,.22), inset 0 0 0 2px rgba(0,0,0,.28);
+}
+.chip.void{
+  background-image:repeating-linear-gradient(45deg,#2f3032 0 4px,#242526 4px 8px);
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,.10);
+}
+.hexpair{font-family:var(--mono); font-size:12px; color:var(--ink-2); font-variant-numeric:tabular-nums}
+.hexpair .to{color:var(--ink-3); padding:0 5px}
+.hexpair .new{color:var(--ink)}
+.note{font-family:var(--mono); font-size:11.5px; color:var(--ink-3)}
+.via{font-family:var(--mono); font-size:11px; color:var(--ink-3)}
+
+/* ── Footer / actions ─────────────────────────────────────────────────────── */
+.actions{
+  margin-top:22px; display:flex; flex-wrap:wrap; gap:14px; align-items:center;
+}
+.summary{font-family:var(--mono); font-size:12px; color:var(--ink-2)}
+.msg{
+  margin-top:18px; padding:12px 14px; border-radius:8px;
+  background:var(--panel); border:1px solid var(--line);
+  font-family:var(--mono); font-size:12.5px; color:var(--ink-2);
+}
+.msg.bad{border-color:#5c4b4b; color:#e4d2d2}
+.hidden{display:none !important}
+footer{margin-top:34px; color:var(--ink-3); font-size:12.5px; max-width:64ch}
+footer code{font-family:var(--mono); font-size:12px; color:var(--ink-2)}
+
+@media (max-width:560px){
+  td.slot{display:none} thead th.slot{display:none}
+  .chip{width:26px}
+}
+@media (prefers-reduced-motion:reduce){*{transition:none !important}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>3MF Recolor</h1>
+  <p>Swap the approximate plate colors baked into a Bambu&nbsp;/&nbsp;Orca project
+     for exact filament RGBs, matched by plate name. Nothing is uploaded — the
+     file is rewritten here in your browser.</p>
+</header>
+
+<div class="drop" id="drop" tabindex="0" role="button" aria-label="Choose a .3mf file">
+  <p id="dropText">Drop a <span class="mono">.3mf</span> here</p>
+  <span class="label">or click to choose a file</span>
+</div>
+<input type="file" id="file" accept=".3mf" class="hidden">
+<input type="file" id="mapFile" accept=".json,application/json" class="hidden">
+
+<div class="bar">
+  <div class="grow src" id="mapSrc"></div>
+  <button id="loadMap">Load mapping</button>
+  <button id="resetMap" class="hidden">Use built-in</button>
+</div>
+
+<div id="msg" class="msg hidden"></div>
+
+<section id="result" class="hidden">
+  <div class="filehead">
+    <div class="name" id="fName"></div>
+    <div class="meta" id="fMeta"></div>
+  </div>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Plate</th>
+        <th>Name</th>
+        <th class="slot">Slot</th>
+        <th>Change</th>
+      </tr>
+    </thead>
+    <tbody id="rows"></tbody>
+  </table>
+
+  <div class="actions">
+    <button id="save" class="primary">Download recolored .3mf</button>
+    <span class="summary" id="summary"></span>
+  </div>
+</section>
+
+<footer>
+  <p>Only <code>Metadata/project_settings.config</code> is rewritten; every other
+  entry is copied through untouched. Plates that use more than one filament are
+  refused rather than flattened. Colors take effect when the file is sliced.</p>
+</footer>
+
+</div>
+
+<script type="module">
+// ───────────────────────────────────────────────────────────────────────────
+// Core logic. Exposed on window for the Playwright tests.
+// ───────────────────────────────────────────────────────────────────────────
+
+const BUILTIN_COLORS = {
+  "Arctic Teal": "#5AABB1",
+  "Army Beige": "#CCA897",
+  "Army Blue": "#062B4D",
+  "Army Brown": "#724E3D",
+  "Army Dark Green": "#515234",
+  "Army Light Green": "#AB8C02",
+  "Army Red": "#bf312e",
+  "Ash Gray": "#485155",
+  "Ash Grey": "#485155",
+  "Candy": "#DABCC8",
+  "Charcoal Black": "#1C1C1C",
+  "Cotton White": "#e6dddb",
+  "Cream": "#eae5ae",
+  "Earth Brown": "#7C594A",
+  "Electric Indigo": "#9917e4",
+  "Forest Green": "#519F61",
+  "Fossil Gray": "#6F727E",
+  "Fossil Grey": "#6F727E",
+  "Lava Red": "#DE1619",
+  "Lotus Pink": "#ef69be",
+  "Marble Brick": "#c65454",
+  "Matte Army Purple": "#292036",
+  "Matte Lavender Purple": "#8a68b5",
+  "Matte Lime Green": "#d0e740",
+  "Matte Pastel Ice": "#95c5d3",
+  "Matte Pastel Periwinkle": "#adb4e6",
+  "Matte Sky Blue": "#1ac5fc",
+  "Mint": "#ceddb8",
+  "Muted Blue": "#4E6A84",
+  "Muted Green": "#656D60",
+  "Muted Purple": "#7C5577",
+  "Muted Red": "#DB3E14",
+  "Muted White": "#AFA198",
+  "PLA+ Blue": "#342de7",
+  "Panchroma Gradient Matte Pastel Rainbow": "#FF0000",
+  "Panchroma Marble Limestone": "#9f9090",
+  "Panchroma Matte Emerald Green": "#22624F",
+  "Panchroma Matte Grass Green": "#32BC46",
+  "Panchroma Matte Muted Mauve": "#A36D82",
+  "Panchroma Matte Muted Moss": "#92864F",
+  "Panchroma Matte Muted Teal": "#5D989E",
+  "Panchroma Matte Muted Terracotta": "#C06443",
+  "Panchroma Matte Pastel Beige": "#E4D0B0",
+  "Panchroma Matte Pastel Coral": "#F09A7E",
+  "Panchroma Matte Pastel Peanut": "#bf9573",
+  "Panchroma Matte Raspberry Blue": "#5472D0",
+  "Panchroma Matte Seafoam Green": "#7DD4BE",
+  "Panchroma Matte Sunshine Yellow": "#ffdd00",
+  "Panchroma Matte Wine Burgundy": "#753E4C",
+  "Panchroma Metallic Blue": "#2c3449",
+  "Panchroma Metallic Silver": "#868080",
+  "Panchroma Silk Blue": "#3609e9",
+  "Pastel Banana": "#F5CF6F",
+  "Pastel Peach": "#F2B67A",
+  "Pastel Watermelon": "#E93A3F",
+  "PolyLite PLA Pro Metallic Chrome": "#74767e",
+  "PolySupport": "#f7f2f2",
+  "Polyflex TPU90 - Clear": "#f7e4e4",
+  "Polylite PLA PRO Gold": "#a66301",
+  "Polylite PLA Pro Metallic Black": "#0e0c0c",
+  "Polylite PLA Pro Metallic Blue": "#2c3449",
+  "Polylite PLA Pro Metallic Red": "#c92626",
+  "Regular Brown": "#55331A",
+  "S1 Natural": "#E8E6D0",
+  "Sakura Pink": "#E0A8BB",
+  "Sapphire Blue": "#005aa2",
+  "Savannah Yellow": "#F0BE02",
+  "Silk Bronze": "#a9470a",
+  "Sunrise Orange": "#F78E0E",
+  "Translucent Cyan": "#319bff",
+  "Wood Brown": "#ab7449"
+};
+
+const td = new TextDecoder('utf-8');
+const te = new TextEncoder();
+
+/* ── ZIP reading ─────────────────────────────────────────────────────────── */
+
+function readCentralDirectory(buf){
+  const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+  let eocd = -1;
+  const min = Math.max(0, buf.length - 65557);
+  for (let i = buf.length - 22; i >= min; i--){
+    if (dv.getUint32(i, true) === 0x06054b50){ eocd = i; break; }
+  }
+  if (eocd < 0) throw new Error('Not a zip archive (no end-of-central-directory record).');
+  const count = dv.getUint16(eocd + 10, true);
+  let p = dv.getUint32(eocd + 16, true);
+  const entries = [];
+  for (let i = 0; i < count; i++){
+    if (dv.getUint32(p, true) !== 0x02014b50) throw new Error('Damaged zip central directory.');
+    const flags = dv.getUint16(p + 8, true);
+    const method = dv.getUint16(p + 10, true);
+    const crc = dv.getUint32(p + 16, true);
+    const csize = dv.getUint32(p + 20, true);
+    const usize = dv.getUint32(p + 24, true);
+    const nameLen = dv.getUint16(p + 28, true);
+    const extraLen = dv.getUint16(p + 30, true);
+    const commentLen = dv.getUint16(p + 32, true);
+    const localOff = dv.getUint32(p + 42, true);
+    const name = td.decode(buf.subarray(p + 46, p + 46 + nameLen));
+    entries.push({name, flags, method, crc, csize, usize, localOff});
+    p += 46 + nameLen + extraLen + commentLen;
+  }
+  return entries;
+}
+
+function rawData(buf, e){
+  const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+  if (dv.getUint32(e.localOff, true) !== 0x04034b50) throw new Error('Damaged zip entry header.');
+  const nameLen = dv.getUint16(e.localOff + 26, true);
+  const extraLen = dv.getUint16(e.localOff + 28, true);
+  const start = e.localOff + 30 + nameLen + extraLen;
+  return buf.subarray(start, start + e.csize);
+}
+
+// Only the two small .config entries are ever inflated. The meshes — which are
+// several hundred MB uncompressed — are never touched.
+async function readEntry(buf, e){
+  const raw = rawData(buf, e);
+  if (e.method === 0) return raw;
+  const stream = new Blob([raw]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
+  return new Uint8Array(await new Response(stream).arrayBuffer());
+}
+
+/* ── ZIP writing ─────────────────────────────────────────────────────────── */
+
+const CRC_TABLE = (() => {
+  const t = new Int32Array(256);
+  for (let n = 0; n < 256; n++){
+    let c = n;
+    for (let k = 0; k < 8; k++) c = (c & 1) ? (0xedb88320 ^ (c >>> 1)) : (c >>> 1);
+    t[n] = c;
+  }
+  return t;
+})();
+function crc32(b){
+  let c = -1;
+  for (let i = 0; i < b.length; i++) c = (c >>> 8) ^ CRC_TABLE[(c ^ b[i]) & 0xff];
+  return (c ^ -1) >>> 0;
+}
+
+// Rebuild the archive, replacing one entry. Untouched entries are copied as
+// raw compressed bytes — never inflated — so this stays fast and low-memory.
+// The replacement is written STORED (method 0), so no compressor is needed.
+function replaceEntry(buf, entries, targetName, newBytes){
+  const chunks = [];
+  const out = [];
+  let offset = 0;
+
+  for (const e of entries){
+    const isTarget = e.name === targetName;
+    const nameBuf = te.encode(e.name);
+    const data = isTarget ? newBytes : rawData(buf, e);
+    const method = isTarget ? 0 : e.method;
+    const csize = isTarget ? data.length : e.csize;
+    const usize = isTarget ? data.length : e.usize;
+    const crc = isTarget ? crc32(data) : e.crc;
+    const flags = e.flags & ~0x08;               // clear data-descriptor bit
+
+    const lh = new Uint8Array(30 + nameBuf.length);
+    const dv = new DataView(lh.buffer);
+    dv.setUint32(0, 0x04034b50, true);
+    dv.setUint16(4, 20, true);
+    dv.setUint16(6, flags, true);
+    dv.setUint16(8, method, true);
+    dv.setUint16(10, 0, true);
+    dv.setUint16(12, 0, true);
+    dv.setUint32(14, crc, true);
+    dv.setUint32(18, csize, true);
+    dv.setUint32(22, usize, true);
+    dv.setUint16(26, nameBuf.length, true);
+    dv.setUint16(28, 0, true);
+    lh.set(nameBuf, 30);
+
+    out.push({...e, crc, csize, usize, method, flags, localOff: offset});
+    chunks.push(lh, data);
+    offset += lh.length + data.length;
+  }
+
+  const cdStart = offset;
+  for (const e of out){
+    const nameBuf = te.encode(e.name);
+    const cd = new Uint8Array(46 + nameBuf.length);
+    const dv = new DataView(cd.buffer);
+    dv.setUint32(0, 0x02014b50, true);
+    dv.setUint16(4, 20, true);
+    dv.setUint16(6, 20, true);
+    dv.setUint16(8, e.flags, true);
+    dv.setUint16(10, e.method, true);
+    dv.setUint32(16, e.crc, true);
+    dv.setUint32(20, e.csize, true);
+    dv.setUint32(24, e.usize, true);
+    dv.setUint16(28, nameBuf.length, true);
+    dv.setUint32(42, e.localOff, true);
+    cd.set(nameBuf, 46);
+    chunks.push(cd);
+    offset += cd.length;
+  }
+
+  const eocd = new Uint8Array(22);
+  const dv = new DataView(eocd.buffer);
+  dv.setUint32(0, 0x06054b50, true);
+  dv.setUint16(8, out.length, true);
+  dv.setUint16(10, out.length, true);
+  dv.setUint32(12, offset - cdStart, true);
+  dv.setUint32(16, cdStart, true);
+  chunks.push(eocd);
+
+  return chunks;
+}
+
+/* ── 3mf model parsing ───────────────────────────────────────────────────── */
+
+// Per plate: its name and the distinct filament slots its objects use
+// (object-level extruder plus any per-part override).
+function parsePlateSlots(xmlText){
+  const doc = new DOMParser().parseFromString(xmlText, 'application/xml');
+  if (doc.querySelector('parsererror')) throw new Error('Could not parse model_settings.config.');
+
+  const metaVal = (el, key) => {
+    for (const m of el.children){
+      if (m.tagName === 'metadata' && (m.getAttribute('key') || '').trim().toLowerCase() === key)
+        return (m.getAttribute('value') || '').trim();
+    }
+    return null;
+  };
+
+  const objSlots = new Map();
+  for (const o of doc.querySelectorAll('object')){
+    const set = new Set();
+    const own = metaVal(o, 'extruder');
+    if (own && /^\d+$/.test(own)) set.add(+own);
+    for (const part of o.querySelectorAll('part')){
+      const pe = metaVal(part, 'extruder');
+      if (pe && /^\d+$/.test(pe)) set.add(+pe);
+    }
+    objSlots.set(o.getAttribute('id'), set);
+  }
+
+  const plates = [];
+  for (const p of doc.querySelectorAll('plate')){
+    const name = metaVal(p, 'plater_name') || '';
+    const idStr = metaVal(p, 'plater_id') || '0';
+    const slots = new Set();
+    for (const inst of p.querySelectorAll('model_instance')){
+      const oid = metaVal(inst, 'object_id');
+      if (oid && objSlots.has(oid)) for (const s of objSlots.get(oid)) slots.add(s);
+    }
+    plates.push({id: parseInt(idStr, 10) || 0, name, slots: [...slots].sort((a,b) => a-b)});
+  }
+  plates.sort((a,b) => a.id - b.id);
+  return plates;
+}
+
+// Exact (case-insensitive) match first, then a UNIQUE substring match in
+// either direction. An unnamed plate never matches; an ambiguous one doesn't
+// either.
+function lookupColor(mapping, plateName){
+  const pn = (plateName || '').trim().toLowerCase();
+  if (!pn) return null;
+  for (const [k, v] of Object.entries(mapping)){
+    if (k.trim().toLowerCase() === pn) return {hex: v, key: k};
+  }
+  let hit = null, n = 0;
+  for (const [k, v] of Object.entries(mapping)){
+    const kl = k.trim().toLowerCase();
+    if (kl.length < 3) continue;
+    if (pn.includes(kl) || kl.includes(pn)){ hit = {hex: v, key: k}; n++; }
+  }
+  return n === 1 ? hit : null;
+}
+
+function planRecolor(plates, existing, mapping){
+  const edits = new Map();
+  const rows = [];
+  for (const p of plates){
+    const row = {plate: p, slot: 0, oldHex: '', newHex: '', key: '', note: ''};
+    if (p.slots.length === 0){
+      row.note = 'no filament slot on this plate';
+    } else if (p.slots.length > 1){
+      row.note = `uses ${p.slots.length} filaments (${p.slots.join(', ')}) — not flattened`;
+    } else {
+      const slot = p.slots[0];
+      const found = lookupColor(mapping, p.name);
+      if (!found){
+        row.note = p.name ? 'no color in mapping' : 'plate has no name';
+      } else if (edits.has(slot) && edits.get(slot).toLowerCase() !== found.hex.toLowerCase()){
+        row.note = `slot ${slot} already set to ${edits.get(slot)} by another plate`;
+      } else {
+        row.slot = slot;
+        row.newHex = found.hex;
+        row.key = found.key;
+        row.oldHex = existing[slot - 1] || '';
+        edits.set(slot, found.hex);
+      }
+    }
+    rows.push(row);
+  }
+  return {rows, edits};
+}
+
+// Replace only the matched hex values inside the filament_colour array; the
+// rest of the file is preserved byte for byte.
+function setFilamentColours(psText, edits){
+  const m = psText.match(/("filament_colour"\s*:\s*\[)([\s\S]*?)(\])/);
+  if (!m) throw new Error('No filament_colour array in project_settings.config.');
+  const total = (m[2].match(/"[^"]*"/g) || []).length;
+  for (const slot of edits.keys()){
+    if (slot < 1 || slot > total)
+      throw new Error(`Filament slot ${slot} is out of range (file has ${total}).`);
+  }
+  let i = 0;
+  const interior = m[2].replace(/"[^"]*"/g, (tok) => {
+    const slot = ++i;
+    return edits.has(slot) ? `"${edits.get(slot)}"` : tok;
+  });
+  return psText.slice(0, m.index) + m[1] + interior + m[3] + psText.slice(m.index + m[0].length);
+}
+
+/* ── Wiring ──────────────────────────────────────────────────────────────── */
+
+const $ = (id) => document.getElementById(id);
+let mapping = BUILTIN_COLORS;
+let mappingName = 'built-in Polymaker';
+let current = null;   // {buf, entries, psName, psText, rows, edits, fileName}
+
+function showMsg(text, bad){
+  const el = $('msg');
+  el.textContent = text;
+  el.className = 'msg' + (bad ? ' bad' : '');
+  el.classList.remove('hidden');
+}
+function clearMsg(){ $('msg').classList.add('hidden'); }
+
+function renderMapSrc(){
+  $('mapSrc').innerHTML =
+    `Colors: <b>${mappingName}</b> · ${Object.keys(mapping).length} names`;
+  $('resetMap').classList.toggle('hidden', mapping === BUILTIN_COLORS);
+}
+
+const fmtMB = (n) => (n / 1048576).toFixed(1) + ' MB';
+
+function render(){
+  const {rows, edits, fileName, buf, plateCount} = current;
+  $('fName').textContent = fileName;
+  $('fMeta').textContent = `${fmtMB(buf.length)} · ${plateCount} plate${plateCount === 1 ? '' : 's'}`;
+
+  const tbody = $('rows');
+  tbody.textContent = '';
+  for (const r of rows){
+    const tr = document.createElement('tr');
+    if (r.note) tr.className = 'skip';
+
+    const num = document.createElement('td');
+    num.className = 'num';
+    num.textContent = String(r.plate.id).padStart(2, '0');
+
+    const name = document.createElement('td');
+    name.className = 'name';
+    name.textContent = r.plate.name || '(unnamed)';
+    if (!r.note && r.key && r.key.trim().toLowerCase() !== r.plate.name.trim().toLowerCase()){
+      const via = document.createElement('span');
+      via.className = 'via';
+      via.textContent = `  via ${r.key}`;
+      name.appendChild(via);
+    }
+
+    const slot = document.createElement('td');
+    slot.className = 'slot';
+    slot.textContent = r.slot ? r.slot : '—';
+
+    const change = document.createElement('td');
+    change.className = 'change';
+    const chip = document.createElement('span');
+    chip.className = 'chip';
+    if (r.note){
+      chip.classList.add('void');
+    } else {
+      const from = r.oldHex || '#000000';
+      chip.style.background =
+        `linear-gradient(135deg, ${from} 0 50%, ${r.newHex} 50% 100%)`;
+      chip.title = `${from} → ${r.newHex}`;
+    }
+    change.appendChild(chip);
+
+    const text = document.createElement('span');
+    if (r.note){
+      text.className = 'note';
+      text.textContent = r.note;
+    } else {
+      text.className = 'hexpair';
+      text.innerHTML =
+        `${r.oldHex || 'n/a'}<span class="to">→</span><span class="new">${r.newHex}</span>`;
+    }
+    change.appendChild(text);
+
+    tr.append(num, name, slot, change);
+    tbody.appendChild(tr);
+  }
+
+  const n = edits.size;
+  const skipped = rows.filter(r => r.note).length;
+  $('summary').textContent =
+    `${n} plate${n === 1 ? '' : 's'} to recolor` + (skipped ? ` · ${skipped} skipped` : '');
+  $('save').disabled = n === 0;
+  $('result').classList.remove('hidden');
+}
+
+async function loadFile(file){
+  clearMsg();
+  $('result').classList.add('hidden');
+  $('dropText').textContent = `Reading ${file.name}…`;
+  try{
+    const buf = new Uint8Array(await file.arrayBuffer());
+    const entries = readCentralDirectory(buf);
+    const msE = entries.find(e => e.name.toLowerCase().endsWith('model_settings.config'));
+    const psE = entries.find(e => e.name.toLowerCase().endsWith('project_settings.config'));
+    if (!msE) throw new Error('No model_settings.config — is this a Bambu/Orca project .3mf?');
+    if (!psE) throw new Error('No project_settings.config — nothing to recolor.');
+
+    const msText = td.decode(await readEntry(buf, msE));
+    const psText = td.decode(await readEntry(buf, psE));
+
+    let existing = [];
+    try{ existing = JSON.parse(psText).filament_colour || []; }catch{ /* keep [] */ }
+
+    const plates = parsePlateSlots(msText);
+    const {rows, edits} = planRecolor(plates, existing, mapping);
+
+    current = {buf, entries, psName: psE.name, psText, rows, edits, plates, existing,
+               fileName: file.name, plateCount: plates.length};
+    render();
+    $('drop').classList.add('compact');
+    if (edits.size === 0)
+      showMsg('No plate names matched the color mapping. Load a different mapping, or check the plate names in the slicer.', true);
+  }catch(err){
+    current = null;
+    $('drop').classList.remove('compact');
+    showMsg(err.message || String(err), true);
+  }finally{
+    $('dropText').innerHTML = current
+      ? 'Choose a different <span class="mono">.3mf</span>'
+      : 'Drop a <span class="mono">.3mf</span> here';
+  }
+}
+
+function save(){
+  if (!current || current.edits.size === 0) return;
+  try{
+    const newPs = te.encode(setFilamentColours(current.psText, current.edits));
+    const chunks = replaceEntry(current.buf, current.entries, current.psName, newPs);
+    const blob = new Blob(chunks, {type: 'application/octet-stream'});
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = current.fileName.replace(/\.3mf$/i, '') + '.recolored.3mf';
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 30000);
+  }catch(err){
+    showMsg(err.message || String(err), true);
+  }
+}
+
+// events
+$('drop').addEventListener('click', () => $('file').click());
+$('drop').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' || e.key === ' '){ e.preventDefault(); $('file').click(); }
+});
+$('file').addEventListener('change', (e) => { if (e.target.files[0]) loadFile(e.target.files[0]); });
+
+const drop = $('drop');
+['dragenter','dragover'].forEach(t => drop.addEventListener(t, (e) => {
+  e.preventDefault(); drop.classList.add('over');
+}));
+['dragleave','drop'].forEach(t => drop.addEventListener(t, (e) => {
+  e.preventDefault(); drop.classList.remove('over');
+}));
+drop.addEventListener('drop', (e) => {
+  const f = e.dataTransfer.files[0];
+  if (f) loadFile(f);
+});
+
+$('loadMap').addEventListener('click', () => $('mapFile').click());
+$('mapFile').addEventListener('change', async (e) => {
+  const f = e.target.files[0];
+  if (!f) return;
+  try{
+    const parsed = JSON.parse(await f.text());
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed))
+      throw new Error('Mapping must be a JSON object of "name": "#RRGGBB".');
+    for (const [k, v] of Object.entries(parsed)){
+      if (typeof v !== 'string' || !/^#[0-9a-f]{6}$/i.test(v.trim()))
+        throw new Error(`"${k}" is not a #RRGGBB color.`);
+    }
+    mapping = parsed;
+    mappingName = f.name;
+    renderMapSrc();
+    clearMsg();
+    if (current) replan();
+  }catch(err){
+    showMsg(err.message || String(err), true);
+  }
+});
+$('resetMap').addEventListener('click', () => {
+  mapping = BUILTIN_COLORS;
+  mappingName = 'built-in Polymaker';
+  renderMapSrc();
+  if (current) replan();
+});
+
+// Re-plan the already-loaded file against a new mapping. The file is already
+// in memory and parsed, so this only redoes the lookup.
+function replan(){
+  if (!current) return;
+  const {rows, edits} = planRecolor(current.plates, current.existing, mapping);
+  current.rows = rows;
+  current.edits = edits;
+  render();
+  if (edits.size === 0) showMsg('No plate names matched the color mapping.', true);
+  else clearMsg();
+}
+
+$('save').addEventListener('click', save);
+
+renderMapSrc();
+
+// exposed for tests
+window.__core = {readCentralDirectory, parsePlateSlots, lookupColor, planRecolor,
+                 setFilamentColours, crc32, BUILTIN_COLORS};
+</script>
+</body>
+</html>

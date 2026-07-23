@@ -1,0 +1,6 @@
+node_modules/
+package-lock.json
+
+# Test output
+*.recolored.3mf
+shot.tmp.mjs
