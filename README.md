@@ -104,7 +104,7 @@ The mapping is a flat JSON object of `name → hex`:
 Names match case-insensitively, exact first, then a *unique* substring (so
 `Cotton White` also matches `PolyTerra™ Cotton White`). Ambiguous matches are
 skipped rather than guessed. Both `gray` and `grey` spellings are included in
-the built-in mapping, since manufacturers and designers disagree.
+the built-in mapping, since the two are used interchangeably in practice.
 
 ## What it changes
 
