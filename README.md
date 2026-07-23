@@ -125,9 +125,9 @@ A plate is **skipped**, never guessed at, when it:
 
 ## How it handles large files
 
-A kit `.3mf` is often ~70 MB compressed and **several hundred MB uncompressed**
-(the sample used in testing is 73 MB → 442 MB). Decompressing the whole archive
-to change one small config file would be slow and memory-hungry.
+A multi-plate `.3mf` is often tens of MB compressed and **several hundred MB
+uncompressed** (the sample used in testing is 73 MB → 442 MB). Decompressing the
+whole archive to change one small config file would be slow and memory-hungry.
 
 Instead this reads the ZIP central directory and copies the **raw compressed
 bytes** of every untouched entry straight into the output. Only the two small
