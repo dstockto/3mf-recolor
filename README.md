@@ -44,9 +44,27 @@ a dropdown listing the whole palette. Use it to:
 - **override** one that matched with something else, or
 - choose **— leave unchanged —** to skip a plate.
 
-The chip and the summary update as you pick, and slot conflicts are re-checked
-each time. Plates that use more than one filament get no dropdown — they are
-refused outright, since there'd be no single slot to apply a color to.
+A plate with no color picked shows the color it currently carries — a solid
+chip and `now #A6A9AA` — so you can see what's actually in the file before
+deciding.
+
+Plates that use more than one filament get no dropdown. They're refused
+outright, since there'd be no single slot to apply one color to.
+
+### Plates that share a filament slot
+
+A `.3mf` stores one color per **filament slot**, not per plate, and several
+plates often share a slot — structural parts named after what they are
+(`Frame`, `Base`, `Pins`) all printed in the same filament.
+
+So the picker sets the *slot*: **choose a color on any one of those plates and
+every plate on that slot follows.** Rows say which plates they're tied to
+(`slot 1 shared with 02`), and the summary counts both, e.g.
+`12 plates to recolor · 3 filament slots`.
+
+If two plates on one slot match *different* color names, the first wins and the
+other row notes what its own name suggested (`name suggests Green`) rather than
+silently showing someone else's color.
 
 ### Colors
 

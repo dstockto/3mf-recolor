@@ -69,15 +69,51 @@ ok('multi-color plate is refused', /not flattened/.test(plan.notes[1]), plan.not
 ok('unnamed plate is skipped', !!plan.notes[2], plan.notes[2]);
 ok('plate with no slot is skipped', !!plan.notes[3], plan.notes[3]);
 
-// -- shared-slot conflict ----------------------------------------------------
-const conflict = await page.evaluate(() => {
+// -- plates sharing a filament slot move together -----------------------------
+const shared = await page.evaluate(() => {
+  const { autoMatch, resolveSelection } = window.__core;
+  // Three structural plates, all on slot 1, none matching a color name.
+  const plates = [
+    { id: 1, name: 'Frame', slots: [1] },
+    { id: 2, name: 'Base',  slots: [1] },
+    { id: 3, name: 'Pins',  slots: [1] },
+  ];
+  const m = { 'Army Red': '#bf312e' };
+  const sel = autoMatch(plates, m);
+  const before = resolveSelection(plates, ['#888888'], m, sel);
+  sel.set(1, 'Army Red');                    // pick once, on the slot
+  const after = resolveSelection(plates, ['#888888'], m, sel);
+  return {
+    beforeHexes: before.rows.map(r => r.newHex),
+    beforeOld:   before.rows.map(r => r.oldHex),
+    beforeNotes: before.rows.map(r => r.note),
+    afterHexes:  after.rows.map(r => r.newHex),
+    editCount:   after.edits.size,
+    sharedWith:  after.rows[0].shared,
+  };
+});
+ok('unmatched plates carry their current color',
+   shared.beforeOld.every(h => h === '#888888') && shared.beforeHexes.every(h => h === ''),
+   JSON.stringify(shared.beforeOld));
+ok('unmatched plate has no scolding note', shared.beforeNotes.every(n => n === ''),
+   JSON.stringify(shared.beforeNotes));
+ok('picking once updates every plate on that slot',
+   shared.afterHexes.every(h => h === '#bf312e'), JSON.stringify(shared.afterHexes));
+ok('one slot means one edit, not three', shared.editCount === 1, String(shared.editCount));
+ok('shared plates are listed on the row',
+   JSON.stringify(shared.sharedWith) === '[2,3]', JSON.stringify(shared.sharedWith));
+
+// A slot whose plates disagree keeps the first match and flags the mismatch.
+const disagree = await page.evaluate(() => {
   const { planRecolor } = window.__core;
   const plates = [{ id: 1, name: 'Red', slots: [1] }, { id: 2, name: 'Green', slots: [1] }];
-  const { rows, edits } = planRecolor(plates, ['#000'], { Red: '#ff0000', Green: '#00ff00' });
-  return { n: edits.size, note: rows[1].note };
+  const { rows, edits } = planRecolor(plates, ['#000000'], { Red: '#ff0000', Green: '#00ff00' });
+  return { n: edits.size, hexes: rows.map(r => r.newHex), hint: rows[1].hint };
 });
-ok('shared slot with different colors is a conflict',
-   conflict.n === 1 && /already set/.test(conflict.note), conflict.note);
+ok('a shared slot resolves to one color', disagree.n === 1 &&
+   disagree.hexes.every(h => h === '#ff0000'), JSON.stringify(disagree.hexes));
+ok('the losing plate says what its name suggested',
+   /name suggests Green/.test(disagree.hint), disagree.hint);
 
 // -- surgical edit -----------------------------------------------------------
 const edit = await page.evaluate(() => {
@@ -147,39 +183,40 @@ const picked = await page.evaluate(() => {
   ];
   const m = { 'Cotton White': '#e6dddb', 'Army Red': '#bf312e' };
   const sel = autoMatch(plates, m);
-  const before = resolveSelection(plates, ['#0', '#1', '#2', '#3'], m, sel);
-  // assign a color to the plate that didn't match, and override the one that did
-  sel.set(2, 'Army Red');
-  sel.set(1, 'Army Red');
-  const after = resolveSelection(plates, ['#0', '#1', '#2', '#3'], m, sel);
-  // multi-color plates are never offered a picker
+  const before = resolveSelection(plates, ['#000000', '#111111', '#222222', '#333333'], m, sel);
+  // Selection is keyed by SLOT: plate 2 sits on slot 3, plate 1 on slot 2.
+  sel.set(3, 'Army Red');   // assign a color to the plate that didn't match
+  sel.set(2, 'Army Red');   // override the one that did
+  const after = resolveSelection(plates, ['#000000', '#111111', '#222222', '#333333'], m, sel);
   return {
-    autoUnmatched: sel.has(2),
+    unmatchedSelectable: before.rows[1].selectable,
     multiSelectable: before.rows[2].selectable,
     beforeEdits: [...before.edits.entries()],
     afterEdits: [...after.edits.entries()],
     overrideHex: after.rows[0].newHex,
   };
 });
-ok('unmatched plate still gets a picker', picked.autoUnmatched === true);
+ok('unmatched plate still gets a picker', picked.unmatchedSelectable === true);
 ok('multi-color plate gets no picker', picked.multiSelectable === false);
 ok('picking a color for an unmatched plate adds an edit',
    picked.beforeEdits.length === 1 && picked.afterEdits.length === 2,
    JSON.stringify(picked.afterEdits));
 ok('picking overrides an auto-match', picked.overrideHex === '#bf312e', picked.overrideHex);
 
-// picking "leave unchanged" removes the edit
+// picking "leave unchanged" removes the edit and reveals the current color
 const cleared = await page.evaluate(() => {
   const { autoMatch, resolveSelection } = window.__core;
   const plates = [{ id: 1, name: 'Cotton White', slots: [2] }];
   const m = { 'Cotton White': '#e6dddb' };
   const sel = autoMatch(plates, m);
-  sel.set(1, '');
-  const r = resolveSelection(plates, ['#0', '#1'], m, sel);
-  return { n: r.edits.size, note: r.rows[0].note };
+  sel.set(2, '');                       // slot 2, not plate 1
+  const r = resolveSelection(plates, ['#000000', '#E4E6E2'], m, sel);
+  return { n: r.edits.size, newHex: r.rows[0].newHex, oldHex: r.rows[0].oldHex };
 });
 ok('choosing "leave unchanged" drops the edit',
-   cleared.n === 0 && /no color selected/.test(cleared.note), cleared.note);
+   cleared.n === 0 && cleared.newHex === '', JSON.stringify(cleared));
+ok('the plate still shows its current color',
+   cleared.oldHex === '#E4E6E2', cleared.oldHex);
 
 // -- custom mapping is remembered across a reload ----------------------------
 {

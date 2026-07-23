@@ -106,6 +106,9 @@ tbody td{padding:11px 8px 11px 0; border-bottom:1px solid var(--line-soft); vert
 tbody tr:last-child td{border-bottom:none}
 td.num{font-family:var(--mono); font-size:12px; color:var(--ink-3); width:1%; white-space:nowrap; padding-right:16px}
 td.name{font-size:14px; min-width:0; word-break:break-word}
+/* Sub-line under a plate name: which other plates ride the same slot, and any
+   disagreement between the plate's name and what the slot is set to. */
+.sub{display:block; font-family:var(--mono); font-size:11px; color:var(--ink-3); margin-top:2px}
 td.slot{font-family:var(--mono); font-size:12px; color:var(--ink-2); width:1%; text-align:right; padding-right:16px}
 td.change{width:1%; white-space:nowrap}
 tr.skip td.name{color:var(--ink-3)}
@@ -505,49 +508,67 @@ function lookupColor(mapping, plateName){
   return n === 1 ? hit : null;
 }
 
-// First pass: propose a color name for every plate that can take one. A plate
-// with no slot, or with more than one, is never proposed for — those are refused.
+// The selection is keyed by FILAMENT SLOT, not by plate. The file stores one
+// color per slot, and several plates commonly share a slot (structural parts
+// all printed in the same filament). Keying by slot means changing any one of
+// those plates changes all of them together — and makes the old "slot already
+// set by another plate" conflict impossible by construction.
 function autoMatch(plates, mapping){
   const selection = new Map();
   for (const p of plates){
     if (p.slots.length !== 1) continue;
+    const slot = p.slots[0];
+    if (selection.get(slot)) continue;         // first plate to match wins the slot
     const found = lookupColor(mapping, p.name);
-    selection.set(p.id, found ? found.key : '');
+    selection.set(slot, found ? found.key : (selection.get(slot) || ''));
   }
   return selection;
 }
 
-// Second pass: turn a selection — auto-matched, or picked by hand — into rows
-// and the slot->hex edits. Conflicts are detected here, so they get re-checked
-// every time a pick changes.
+// Turn a selection — auto-matched, or picked by hand — into rows and the
+// slot->hex edits.
 function resolveSelection(plates, existing, mapping, selection){
+  // Which plates use each slot, counting multi-filament plates too: they have
+  // no picker, but their colors still move when a shared slot changes.
+  const users = new Map();
+  for (const p of plates){
+    for (const s of p.slots){
+      if (!users.has(s)) users.set(s, []);
+      users.get(s).push(p.id);
+    }
+  }
+
   const edits = new Map();
   const rows = [];
   for (const p of plates){
     const row = {plate: p, slot: 0, oldHex: '', newHex: '', key: '', note: '',
-                 selectable: false};
+                 hint: '', shared: [], selectable: false};
     if (p.slots.length === 0){
       row.note = 'no filament slot on this plate';
     } else if (p.slots.length > 1){
-      row.note = `uses ${p.slots.length} filaments (${p.slots.join(', ')}) — not flattened`;
+      row.note = `uses ${p.slots.length} filaments (slots ${p.slots.join(', ')}) — not flattened`;
     } else {
       const slot = p.slots[0];
       row.selectable = true;
+      row.slot = slot;
       row.oldHex = existing[slot - 1] || '';
-      const name = selection.get(p.id) || '';
+      row.shared = (users.get(slot) || []).filter(id => id !== p.id);
+
+      const name = selection.get(slot) || '';
       row.key = name;
       const hex = name ? mapping[name] : null;
       if (!name){
-        row.note = p.name ? 'no color selected' : 'plate has no name';
+        if (!p.name) row.note = 'plate has no name';
       } else if (!hex){
         row.note = `"${name}" is not in this mapping`;
-      } else if (edits.has(slot) && edits.get(slot).toLowerCase() !== hex.toLowerCase()){
-        row.note = `slot ${slot} already set to ${edits.get(slot)} by another plate`;
       } else {
-        row.slot = slot;
         row.newHex = hex;
         edits.set(slot, hex);
       }
+      // If this plate's own name points at a different color than the slot is
+      // set to, say so rather than silently showing someone else's choice.
+      const own = lookupColor(mapping, p.name);
+      if (own && name && own.key !== name) row.hint = `name suggests ${own.key}`;
     }
     rows.push(row);
   }
@@ -675,7 +696,7 @@ function buildPicker(row){
 
   sel.value = row.key || '';
   sel.addEventListener('change', () => {
-    current.selection.set(row.plate.id, sel.value);
+    current.selection.set(row.slot, sel.value);   // by slot: shared plates follow
     replan({focus: row.plate.id});
   });
   return sel;
@@ -690,7 +711,7 @@ function render(opts = {}){
   tbody.textContent = '';
   for (const r of rows){
     const tr = document.createElement('tr');
-    if (r.note) tr.className = 'skip';
+    if (!r.newHex) tr.className = 'skip';
 
     const num = document.createElement('td');
     num.className = 'num';
@@ -698,7 +719,17 @@ function render(opts = {}){
 
     const name = document.createElement('td');
     name.className = 'name';
-    name.textContent = r.plate.name || '(unnamed)';
+    name.appendChild(document.createTextNode(r.plate.name || '(unnamed)'));
+    const notes = [];
+    if (r.shared.length)
+      notes.push(`slot ${r.slot} shared with ${r.shared.map(i => String(i).padStart(2, '0')).join(', ')}`);
+    if (r.hint) notes.push(r.hint);
+    if (notes.length){
+      const sub = document.createElement('span');
+      sub.className = 'sub';
+      sub.textContent = notes.join(' · ');
+      name.appendChild(sub);
+    }
 
     const slot = document.createElement('td');
     slot.className = 'slot';
@@ -713,9 +744,12 @@ function render(opts = {}){
       const from = r.oldHex || '#000000';
       chip.style.background = `linear-gradient(135deg, ${from} 0 50%, ${r.newHex} 50% 100%)`;
       chip.title = `${from} → ${r.newHex}`;
+    } else if (r.selectable && r.oldHex){
+      // Nothing picked yet — show the color the plate currently carries.
+      chip.style.background = r.oldHex;
+      chip.title = `currently ${r.oldHex}`;
     } else {
       chip.classList.add('void');
-      if (r.oldHex) chip.title = `stays ${r.oldHex}`;
     }
     change.appendChild(chip);
 
@@ -730,9 +764,12 @@ function render(opts = {}){
       // replaced needs stating here.
       text.className = 'hexpair';
       text.innerHTML = `was <span class="old">${r.oldHex || 'n/a'}</span>`;
-    } else {
+    } else if (r.note){
       text.className = 'note';
       text.textContent = r.note;
+    } else {
+      text.className = 'hexpair';
+      text.innerHTML = `now <span class="old">${r.oldHex || 'not set'}</span>`;
     }
     stack.appendChild(text);
     change.appendChild(stack);
@@ -746,11 +783,14 @@ function render(opts = {}){
     }
   }
 
-  const n = edits.size;
-  const skipped = rows.length - n;
-  $('summary').textContent =
-    `${n} plate${n === 1 ? '' : 's'} to recolor` + (skipped ? ` · ${skipped} unchanged` : '');
-  $('save').disabled = n === 0;
+  const changed = rows.filter(r => r.newHex).length;
+  const slots = edits.size;
+  const unchanged = rows.length - changed;
+  let summary = `${changed} plate${changed === 1 ? '' : 's'} to recolor`;
+  if (slots && slots !== changed) summary += ` · ${slots} filament slot${slots === 1 ? '' : 's'}`;
+  if (unchanged) summary += ` · ${unchanged} unchanged`;
+  $('summary').textContent = summary;
+  $('save').disabled = slots === 0;
   $('result').classList.remove('hidden');
 }
 
