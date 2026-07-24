@@ -51,7 +51,17 @@ a dropdown listing the whole palette. Use it to:
 
 A plate with no color picked shows the color it currently carries — a solid
 chip and `now #A6A9AA` — so you can see what's actually in the file before
-deciding.
+deciding. It also names the palette entry that color is closest to
+(`nearest color: Ash Gray #485155 · ΔE 1.6`), which is usually what you want for
+a plate named after a part rather than a color.
+
+Closeness is CIEDE2000 ΔE over CIE L\*a\*b\*, on the conventional 0–100 scale:
+0 is identical, ~1 is the smallest difference most people can see, and black vs
+white is 100. That's the same measure `fil find --near` uses, so a color named
+here is the color `fil` would name, to the same ΔE.
+
+The suggestion is only a pointer at the dropdown. Nothing is rewritten unless
+you actually pick it.
 
 Plates that use more than one filament get no dropdown. They're refused
 outright, since there'd be no single slot to apply one color to.

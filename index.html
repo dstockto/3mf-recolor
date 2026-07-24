@@ -269,7 +269,6 @@ const BUILTIN_COLORS = {
   "Muted Red": "#DB3E14",
   "Muted White": "#AFA198",
   "PLA+ Blue": "#342de7",
-  "Panchroma Gradient Matte Pastel Rainbow": "#FF0000",
   "Panchroma Marble Limestone": "#9f9090",
   "Panchroma Matte Emerald Green": "#22624F",
   "Panchroma Matte Grass Green": "#32BC46",
@@ -291,20 +290,16 @@ const BUILTIN_COLORS = {
   "Pastel Peach": "#F2B67A",
   "Pastel Watermelon": "#E93A3F",
   "PolyLite PLA Pro Metallic Chrome": "#74767e",
-  "PolySupport": "#f7f2f2",
-  "Polyflex TPU90 - Clear": "#f7e4e4",
   "Polylite PLA PRO Gold": "#a66301",
   "Polylite PLA Pro Metallic Black": "#0e0c0c",
   "Polylite PLA Pro Metallic Blue": "#2c3449",
   "Polylite PLA Pro Metallic Red": "#c92626",
   "Regular Brown": "#55331A",
-  "S1 Natural": "#E8E6D0",
   "Sakura Pink": "#E0A8BB",
   "Sapphire Blue": "#005aa2",
   "Savannah Yellow": "#F0BE02",
   "Silk Bronze": "#a9470a",
   "Sunrise Orange": "#F78E0E",
-  "Translucent Cyan": "#319bff",
   "Wood Brown": "#ab7449"
 };
 
@@ -508,6 +503,107 @@ function lookupColor(mapping, plateName){
   return n === 1 ? hit : null;
 }
 
+// --- Perceptual color distance ----------------------------------------------
+// A port of what `fil find --near` uses, so the nearest color this page names
+// is the same one `fil` would name, to the same ΔE. That's go-colorful's
+// DistanceCIEDE2000 on D65 CIE L*a*b*, reported on the conventional 0–100
+// scale. Keep these three functions in step with fil/cmd/find_near.go.
+
+// Hex -> [r,g,b] in 0..1, or null. Mirrors fil's parseHexColor: '#' optional,
+// 3-digit shorthand expanded, and any alpha suffix ignored (a .3mf slot color
+// is sometimes stored as 8-digit RGBA).
+function parseHexColor(hex){
+  let s = (hex || '').trim();
+  if (s[0] === '#') s = s.slice(1);
+  if (s.length === 3) s = s[0] + s[0] + s[1] + s[1] + s[2] + s[2];
+  if (s.length > 6) s = s.slice(0, 6);
+  if (!/^[0-9a-f]{6}$/i.test(s)) return null;
+  const v = parseInt(s, 16);
+  return [((v >> 16) & 255) / 255, ((v >> 8) & 255) / 255, (v & 255) / 255];
+}
+
+// sRGB 0..1 -> CIE L*a*b* (D65), L on 0..100. The RGB->XYZ matrix and the
+// D65 white are go-colorful's values verbatim, so the two implementations
+// agree to floating-point noise rather than merely "about the same".
+function rgbToLab(rgb){
+  const lin = (c) => c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+  const r = lin(rgb[0]), g = lin(rgb[1]), b = lin(rgb[2]);
+  const x = 0.41239079926595948 * r + 0.35758433938387796 * g + 0.18048078840183429 * b;
+  const y = 0.21263900587151036 * r + 0.71516867876775593 * g + 0.072192315360733715 * b;
+  const z = 0.019330818715591851 * r + 0.11919477979462599 * g + 0.95053215224966058 * b;
+  const D65 = [0.95047, 1.00000, 1.08883];
+  const f = (t) => t > Math.pow(6 / 29, 3) ? Math.cbrt(t) : t / 3 * (29 / 6) * (29 / 6) + 4 / 29;
+  const fy = f(y / D65[1]);
+  return [116 * fy - 16, 500 * (f(x / D65[0]) - fy), 200 * (fy - f(z / D65[2]))];
+}
+
+// CIEDE2000 ΔE between two Lab colors, on the 0–100 scale (0 is identical;
+// roughly 1 is the smallest difference a person can see; black vs white is
+// about 100). Ported from go-colorful's DistanceCIEDE2000klch with kL=kC=kH=1.
+function deltaE2000(lab1, lab2){
+  const sq = (x) => x * x, rad = Math.PI / 180;
+  const [l1, a1, b1] = lab1, [l2, a2, b2] = lab2;
+
+  const cabmean = (Math.hypot(a1, b1) + Math.hypot(a2, b2)) / 2;
+  const g = 0.5 * (1 - Math.sqrt(Math.pow(cabmean, 7) / (Math.pow(cabmean, 7) + Math.pow(25, 7))));
+  const ap1 = (1 + g) * a1, ap2 = (1 + g) * a2;
+  const cp1 = Math.hypot(ap1, b1), cp2 = Math.hypot(ap2, b2);
+
+  const hue = (b, ap) => {
+    if (b === ap && ap === 0) return 0;
+    let h = Math.atan2(b, ap);
+    if (h < 0) h += Math.PI * 2;
+    return h / rad;
+  };
+  const hp1 = hue(b1, ap1), hp2 = hue(b2, ap2);
+
+  const deltaLp = l2 - l1, deltaCp = cp2 - cp1;
+  const cpProduct = cp1 * cp2;
+  let dhp = 0;
+  if (cpProduct !== 0){
+    dhp = hp2 - hp1;
+    if (dhp > 180) dhp -= 360; else if (dhp < -180) dhp += 360;
+  }
+  const deltaHp = 2 * Math.sqrt(cpProduct) * Math.sin(dhp / 2 * rad);
+
+  const lpmean = (l1 + l2) / 2, cpmean = (cp1 + cp2) / 2;
+  let hpmean = hp1 + hp2;
+  if (cpProduct !== 0){
+    hpmean /= 2;
+    if (Math.abs(hp1 - hp2) > 180) hpmean += hp1 + hp2 < 360 ? 180 : -180;
+  }
+
+  const t = 1 - 0.17 * Math.cos((hpmean - 30) * rad) + 0.24 * Math.cos(2 * hpmean * rad)
+              + 0.32 * Math.cos((3 * hpmean + 6) * rad) - 0.2 * Math.cos((4 * hpmean - 63) * rad);
+  const deltaTheta = 30 * Math.exp(-sq((hpmean - 275) / 25));
+  const rc = 2 * Math.sqrt(Math.pow(cpmean, 7) / (Math.pow(cpmean, 7) + Math.pow(25, 7)));
+  const sl = 1 + (0.015 * sq(lpmean - 50)) / Math.sqrt(20 + sq(lpmean - 50));
+  const sc = 1 + 0.045 * cpmean;
+  const sh = 1 + 0.015 * cpmean * t;
+  const rt = -Math.sin(2 * deltaTheta * rad) * rc;
+
+  const dl = deltaLp / sl, dc = deltaCp / sc, dh = deltaHp / sh;
+  return Math.sqrt(sq(dl) + sq(dc) + sq(dh) + rt * dc * dh);
+}
+
+// The palette entry that looks closest to hex. Names can't help here — this is
+// for plates whose name says nothing about color ("Frame", "Base"), where the
+// color the slot already carries is the only signal there is. Returns null if
+// hex isn't a color or the mapping has none. Ties go to the first name seen.
+function nearestColor(mapping, hex){
+  const rgb = parseHexColor(hex);
+  if (!rgb) return null;
+  const target = rgbToLab(rgb);
+  let best = null;
+  for (const [k, v] of Object.entries(mapping)){
+    const c = parseHexColor(v);
+    if (!c) continue;
+    const d = deltaE2000(rgbToLab(c), target);
+    if (!best || d < best.dE) best = {key: k, hex: v, dE: d};
+  }
+  return best;
+}
+
 // The selection is keyed by FILAMENT SLOT, not by plate. The file stores one
 // color per slot, and several plates commonly share a slot (structural parts
 // all printed in the same filament). Keying by slot means changing any one of
@@ -542,7 +638,7 @@ function resolveSelection(plates, existing, mapping, selection){
   const rows = [];
   for (const p of plates){
     const row = {plate: p, slot: 0, oldHex: '', newHex: '', key: '', note: '',
-                 hint: '', shared: [], selectable: false};
+                 hint: '', nearest: null, shared: [], selectable: false};
     if (p.slots.length === 0){
       row.note = 'no filament slot on this plate';
     } else if (p.slots.length > 1){
@@ -559,6 +655,10 @@ function resolveSelection(plates, existing, mapping, selection){
       const hex = name ? mapping[name] : null;
       if (!name){
         if (!p.name) row.note = 'plate has no name';
+        // Nothing picked and the name gave us nothing, so offer the palette
+        // entry the slot's current color is closest to. It is only a pointer at
+        // the picker — the row still saves unchanged unless someone chooses it.
+        row.nearest = nearestColor(mapping, row.oldHex);
       } else if (!hex){
         row.note = `"${name}" is not in this mapping`;
       } else {
@@ -724,6 +824,8 @@ function render(opts = {}){
     if (r.shared.length)
       notes.push(`slot ${r.slot} shared with ${r.shared.map(i => String(i).padStart(2, '0')).join(', ')}`);
     if (r.hint) notes.push(r.hint);
+    if (r.nearest)
+      notes.push(`nearest color: ${r.nearest.key} ${r.nearest.hex} · ΔE ${r.nearest.dE.toFixed(1)}`);
     if (notes.length){
       const sub = document.createElement('span');
       sub.className = 'sub';
@@ -929,8 +1031,9 @@ restoreMapping();
 renderMapSrc();
 
 // exposed for tests
-window.__core = {readCentralDirectory, parsePlateSlots, lookupColor, planRecolor,
-                 autoMatch, resolveSelection, setFilamentColours, crc32, BUILTIN_COLORS};
+window.__core = {readCentralDirectory, parsePlateSlots, lookupColor, nearestColor,
+                 planRecolor, autoMatch, resolveSelection, setFilamentColours, crc32,
+                 BUILTIN_COLORS};
 </script>
 </body>
 </html>

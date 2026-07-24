@@ -49,6 +49,55 @@ ok('empty plate name never matches', lookup.empty === null);
 ok('unknown name does not match', lookup.unknown === null);
 ok('exact wins over ambiguous substring', lookup.ambiguous === '#001');
 
+// -- nearest color -----------------------------------------------------------
+const near = await page.evaluate(() => {
+  const { nearestColor } = window.__core;
+  const m = { 'Lava Red': '#DE1619', 'Ash Gray': '#485155', 'Forest Green': '#519F61' };
+  return {
+    red:      nearestColor(m, '#d81f22')?.key,
+    gray:     nearestColor(m, '#4b545a')?.key,
+    // Raw-RGB distance calls this dark saturated green a gray; ΔE sees green.
+    darkGreen:nearestColor(m, '#027305')?.key,
+    exact:    nearestColor(m, '#DE1619'),
+    rgba:     nearestColor(m, '#DE1619FF')?.key,   // .3mf slots can carry alpha
+    short:    nearestColor(m, '#f00')?.key,
+    noHash:   nearestColor(m, 'DE1619')?.key,
+    notColor: nearestColor(m, ''),
+    noPalette:nearestColor({}, '#ffffff'),
+    badEntry: nearestColor({ Bogus: 'not a color', 'Lava Red': '#DE1619' }, '#ff0000')?.key,
+  };
+});
+ok('nearest picks the obvious red', near.red === 'Lava Red', near.red);
+ok('nearest picks the obvious gray', near.gray === 'Ash Gray', near.gray);
+ok('nearest judges perceptually, not by raw RGB', near.darkGreen === 'Forest Green',
+   near.darkGreen);
+ok('an exact color match is ΔE 0',
+   near.exact?.key === 'Lava Red' && near.exact.dE < 1e-9, JSON.stringify(near.exact));
+ok('an 8-digit RGBA slot color drops its alpha', near.rgba === 'Lava Red', near.rgba);
+ok('3-digit shorthand is expanded', near.short === 'Lava Red', near.short);
+ok('a bare hex needs no leading #', near.noHash === 'Lava Red', near.noHash);
+ok('a plate with no current color has no nearest', near.notColor === null);
+ok('an empty palette has no nearest', near.noPalette === null);
+ok('unparseable palette entries are skipped', near.badEntry === 'Lava Red', near.badEntry);
+
+// The ΔE numbers must match `fil find --near`, not merely rank the same way —
+// these are go-colorful's DistanceCIEDE2000 × 100 for the pairs below.
+const dE = await page.evaluate(() => {
+  const { nearestColor } = window.__core;
+  const at = (target, hex) => nearestColor({ x: hex }, target).dE;
+  return {
+    blackWhite: at('#000000', '#ffffff'),
+    redBlue:    at('#ff0000', '#0000ff'),
+    redOrange:  at('#ff0000', '#ff5500'),
+    grayPair:   at('#485155', '#4b545a'),
+  };
+});
+const closeTo = (a, b) => Math.abs(a - b) < 0.05;
+ok('ΔE black↔white matches go-colorful', closeTo(dE.blackWhite, 100.000), String(dE.blackWhite));
+ok('ΔE red↔blue matches go-colorful', closeTo(dE.redBlue, 52.879), String(dE.redBlue));
+ok('ΔE red↔orange matches go-colorful', closeTo(dE.redOrange, 9.578), String(dE.redOrange));
+ok('ΔE near-identical grays matches go-colorful', closeTo(dE.grayPair, 1.623), String(dE.grayPair));
+
 // -- planning guards ---------------------------------------------------------
 const plan = await page.evaluate(() => {
   const { planRecolor } = window.__core;
@@ -103,6 +152,23 @@ ok('one slot means one edit, not three', shared.editCount === 1, String(shared.e
 ok('shared plates are listed on the row',
    JSON.stringify(shared.sharedWith) === '[2,3]', JSON.stringify(shared.sharedWith));
 
+// A name that says nothing about color gets a nearest-color pointer — and the
+// pointer stays a suggestion: it must not turn into an edit on its own.
+const suggest = await page.evaluate(() => {
+  const { planRecolor } = window.__core;
+  const plates = [{ id: 1, name: 'Frame', slots: [1] }, { id: 2, name: 'Lava Red', slots: [2] }];
+  const m = { 'Lava Red': '#DE1619', 'Ash Gray': '#485155' };
+  const { rows, edits } = planRecolor(plates, ['#4b545a', '#000000'], m);
+  return { nearest: rows[0].nearest?.key, newHex: rows[0].newHex, key: rows[0].key,
+           matchedNearest: rows[1].nearest, edits: [...edits.entries()] };
+});
+ok('an unmatched plate is pointed at its nearest color', suggest.nearest === 'Ash Gray',
+   suggest.nearest);
+ok('the suggestion is not an edit',
+   suggest.newHex === '' && suggest.key === '' && suggest.edits.length === 1,
+   JSON.stringify(suggest.edits));
+ok('a name-matched plate gets no nearest-color noise', suggest.matchedNearest === null);
+
 // A slot whose plates disagree keeps the first match and flags the mismatch.
 const disagree = await page.evaluate(() => {
   const { planRecolor } = window.__core;
@@ -141,6 +207,16 @@ ok('built-in mapping is embedded', builtin.n > 50, `${builtin.n} colors`);
 ok('built-in has gray and grey variants',
    builtin.gray === builtin.grey && !!builtin.gray);
 ok('no malformed keys', builtin.malformed.length === 0, builtin.malformed.join(','));
+
+// The palette lives twice: colors.json on disk, and a copy inlined in the page
+// so it works from file:// with no fetch. Nothing but this test stops the two
+// from drifting apart when a color is added or removed.
+{
+  const onDisk = JSON.parse(readFileSync(join(here, '..', 'colors.json'), 'utf8'));
+  const diff = [...new Set([...Object.keys(onDisk), ...Object.keys(builtinAll)])]
+    .filter(k => onDisk[k] !== builtinAll[k]);
+  ok('colors.json and the inlined copy agree', diff.length === 0, diff.join(', '));
+}
 
 // -- mapping export round-trips ---------------------------------------------
 {
